@@ -15,7 +15,7 @@ public enum TableSchema {
 
     CI_BANK_MST("CI_BANK_MST", "CI_BANK_LDTL", new String[]{"FNLT_NM"}),
     CI_COA_MST("CI_COA_MST", "CI_COA_LDTL", new String[]{"ACCT_NM"}),
-    CI_ITEM("CI_ITEM", "CI_ITEMLANG_SDTL", new String[]{"ITEM_NM", "ITEM_SPEC_DC"}),
+    CI_ITEM("CI_ITEM", "CI_ITEMLANG_SDTL", new String[]{"ITEM_NM", "ITEM_SPEC_DC", "ITEM_DTL_SPEC_DC"}),
     CI_ITEM_DEF("CI_ITEM_DEF", "CI_ITEM_DEF_SDTL", new String[]{"UNTD_ITEM_STD_NM"}),
     CI_MOVETYPE_MST("CI_MOVETYPE_MST", "CI_MOVETYPE_LDTL", new String[]{"INVTRX_TP_NM"}),
     CI_MNG_DTL("CI_MNG_DTL", "CI_MODULE_SDTL", new String[]{"MODULE_NM"}),
