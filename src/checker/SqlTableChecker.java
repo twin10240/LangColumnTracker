@@ -111,12 +111,62 @@ public class SqlTableChecker {
         return trimmed;
     }
 
-    // SELECT ~ FROM 사이 조회 컬럼 추출
+    /**
+     * 서브쿼리를 제거한 뒤 메인 SELECT ~ FROM 사이 조회 컬럼 추출
+     */
     private String extractSelectColumns(String sql) {
+        // 1. 서브쿼리 제거 (괄호 depth 추적으로 중첩 괄호 안의 내용 제거)
+        String removedSubQuery = removeSubQueries(sql);
+
+        // 2. 서브쿼리 제거된 SQL에서 SELECT ~ FROM 추출
         String regex = "SELECT\\s+(.*?)\\s+FROM\\s";
         Pattern pattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-        Matcher matcher = pattern.matcher(sql);
+        Matcher matcher = pattern.matcher(removedSubQuery);
+
         return matcher.find() ? matcher.group(1).trim() : "";
+    }
+
+    /**
+     * SELECT 키워드가 포함된 괄호(서브쿼리)만 제거
+     * COALESCE(), NVL(), DECODE() 같은 SQL 함수 괄호는 유지
+     */
+    private String removeSubQueries(String sql) {
+        StringBuilder result = new StringBuilder();
+        int i = 0;
+
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+
+            if (c == '(') {
+                // 괄호 안의 내용 추출
+                int depth = 1;
+                int start = i + 1;
+                int j = i + 1;
+
+                while (j < sql.length() && depth > 0) {
+                    if (sql.charAt(j) == '(') depth++;
+                    else if (sql.charAt(j) == ')') depth--;
+                    j++;
+                }
+
+                // 괄호 안의 내용
+                String inner = sql.substring(start, j - 1).trim();
+
+                // 괄호 안에 SELECT가 있으면 서브쿼리 → 제거
+                if (inner.toUpperCase().startsWith("SELECT")) {
+                    i = j; // 괄호 전체 스킵
+                } else {
+                    // SQL 함수 괄호 → 그대로 유지
+                    result.append(sql, i, j);
+                    i = j;
+                }
+            } else {
+                result.append(c);
+                i++;
+            }
+        }
+
+        return result.toString();
     }
 
     // alias 여러 개 추출
