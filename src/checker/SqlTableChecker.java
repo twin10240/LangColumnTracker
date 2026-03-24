@@ -112,25 +112,75 @@ public class SqlTableChecker {
     }
 
     /**
-     * 서브쿼리를 제거한 뒤 메인 SELECT ~ FROM 사이 조회 컬럼 추출
+     * 메인 SELECT 컬럼 추출
+     * - FROM 절 인라인 뷰: 내부로 진입해서 추출
+     * - SELECT 컬럼 자리 스칼라 서브쿼리: 제거
      */
     private String extractSelectColumns(String sql) {
-        // 1. 서브쿼리 제거 (괄호 depth 추적으로 중첩 괄호 안의 내용 제거)
-        String removedSubQuery = removeSubQueries(sql);
+        String trimmed = sql.trim();
 
-        // 2. 서브쿼리 제거된 SQL에서 SELECT ~ FROM 추출
+        // FROM 바로 뒤에 서브쿼리가 오는 인라인 뷰 케이스
+        // 예: SELECT T.* FROM (SELECT ...)T
+        if (isInlineViewPattern(trimmed)) {
+            String innerSql = extractInlineViewSql(trimmed);
+            if (innerSql != null) {
+                return extractSelectColumns(innerSql); // 내부 SQL로 재귀 진입
+            }
+        }
+
+        // 일반 케이스: 스칼라 서브쿼리 제거 후 SELECT ~ FROM 추출
+        String removedScalar = removeScalarSubQueries(trimmed);
         String regex = "SELECT\\s+(.*?)\\s+FROM\\s";
         Pattern pattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-        Matcher matcher = pattern.matcher(removedSubQuery);
+        Matcher matcher = pattern.matcher(removedScalar);
 
         return matcher.find() ? matcher.group(1).trim() : "";
     }
 
     /**
-     * SELECT 키워드가 포함된 괄호(서브쿼리)만 제거
-     * COALESCE(), NVL(), DECODE() 같은 SQL 함수 괄호는 유지
+     * SELECT T.* FROM( SELECT~ 패턴 감지
+     * 즉, FROM 바로 뒤에 괄호+SELECT가 오는 인라인 뷰 패턴
      */
-    private String removeSubQueries(String sql) {
+    private boolean isInlineViewPattern(String sql) {
+        String regex = "SELECT\\s+.*?\\s+FROM\\s*\\(\\s*SELECT";
+        Pattern pattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+        return pattern.matcher(sql).find();
+    }
+
+    /**
+     * FROM ( SELECT ~ ) 안의 SQL 추출
+     */
+    private String extractInlineViewSql(String sql) {
+        // FROM 이후 첫 번째 괄호 위치 찾기
+        String upperSql = sql.toUpperCase();
+        int fromIndex = upperSql.indexOf("FROM");
+        if (fromIndex == -1) return null;
+
+        int openIndex = sql.indexOf('(', fromIndex);
+        if (openIndex == -1) return null;
+
+        // 괄호 depth 추적으로 인라인 뷰 전체 추출
+        int depth = 1;
+        int i = openIndex + 1;
+
+        while (i < sql.length() && depth > 0) {
+            char c = sql.charAt(i);
+            if      (c == '(') depth++;
+            else if (c == ')') depth--;
+            i++;
+        }
+
+        // 괄호 안의 SQL 반환
+        return sql.substring(openIndex + 1, i - 1).trim();
+    }
+
+    /**
+     * SELECT 컬럼 자리의 스칼라 서브쿼리만 제거
+     * 판단 기준: 괄호 닫힌 후 AS 컬럼명 또는 , 또는 FROM 이 오는 경우
+     * 예: (SELECT CODE_NM FROM ...) AS CODE_NM  → 제거
+     *     COALESCE(B.USER_NM, A.USER_NM)        → 유지
+     */
+    private String removeScalarSubQueries(String sql) {
         StringBuilder result = new StringBuilder();
         int i = 0;
 
@@ -138,25 +188,24 @@ public class SqlTableChecker {
             char c = sql.charAt(i);
 
             if (c == '(') {
-                // 괄호 안의 내용 추출
+                // 괄호 안 내용 추출
                 int depth = 1;
                 int start = i + 1;
                 int j = i + 1;
 
                 while (j < sql.length() && depth > 0) {
-                    if (sql.charAt(j) == '(') depth++;
+                    if      (sql.charAt(j) == '(') depth++;
                     else if (sql.charAt(j) == ')') depth--;
                     j++;
                 }
 
-                // 괄호 안의 내용
                 String inner = sql.substring(start, j - 1).trim();
 
-                // 괄호 안에 SELECT가 있으면 서브쿼리 → 제거
+                // 괄호 안이 SELECT로 시작하면 스칼라 서브쿼리 → 제거
                 if (inner.toUpperCase().startsWith("SELECT")) {
                     i = j; // 괄호 전체 스킵
                 } else {
-                    // SQL 함수 괄호 → 그대로 유지
+                    // SQL 함수 괄호 → 유지
                     result.append(sql, i, j);
                     i = j;
                 }
