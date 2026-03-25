@@ -16,8 +16,16 @@ public class SqlTableChecker {
 
         for (SelectResult selectResult : selectResults) {
             String sql            = selectResult.getSql().toUpperCase();
+            // i18nExcluded 주석이 있으면 다국어 체크 스킵
+            if (isI18nExcluded(sql)) {
+                continue;
+            }
+
             String sqlWithoutWith = removeWithClause(sql);
             String selectColumns  = extractSelectColumns(sqlWithoutWith);
+
+             // WITH절 사용 여부 체크
+            boolean hasWithClause = sql.trim().startsWith("WITH");  // ← 추가
 
             List<String> tableNames           = new ArrayList<>();
             List<String> langTableNames       = new ArrayList<>();
@@ -76,6 +84,7 @@ public class SqlTableChecker {
 
             checkResults.add(new CheckResult(
                 selectResult.getId(),
+                hasWithClause,
                 tableNames,
                 langTableNames,
                 unusedLangTableNames,
@@ -112,29 +121,84 @@ public class SqlTableChecker {
     }
 
     /**
-     * 메인 SELECT 컬럼 추출
-     * - FROM 절 인라인 뷰: 내부로 진입해서 추출
-     * - SELECT 컬럼 자리 스칼라 서브쿼리: 제거
+     * 1단계: WITH절 제거된 SQL에서 SELECT ~ FROM 사이만 추출 (depth 0 기준)
+     * 2단계: 추출된 컬럼 영역에서 스칼라 서브쿼리만 제거
      */
     private String extractSelectColumns(String sql) {
         String trimmed = sql.trim();
 
-        // FROM 바로 뒤에 서브쿼리가 오는 인라인 뷰 케이스
-        // 예: SELECT T.* FROM (SELECT ...)T
-        if (isInlineViewPattern(trimmed)) {
+        // 1단계: depth 0 기준으로 SELECT ~ 메인 FROM 사이 컬럼 영역 추출
+        String columnArea = extractColumnArea(trimmed);
+
+        // 2단계: 컬럼 영역이 * 또는 별칭.* 만 있으면 → FROM 절 인라인 뷰로 진입
+        if (isWildCardOnly(columnArea)) {
             String innerSql = extractInlineViewSql(trimmed);
             if (innerSql != null) {
                 return extractSelectColumns(innerSql); // 내부 SQL로 재귀 진입
             }
         }
 
-        // 일반 케이스: 스칼라 서브쿼리 제거 후 SELECT ~ FROM 추출
-        String removedScalar = removeScalarSubQueries(trimmed);
-        String regex = "SELECT\\s+(.*?)\\s+FROM\\s";
-        Pattern pattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-        Matcher matcher = pattern.matcher(removedScalar);
+        // 3단계: 컬럼 영역 안의 스칼라 서브쿼리만 제거
+        return removeScalarSubQueries(columnArea);
+    }
 
-        return matcher.find() ? matcher.group(1).trim() : "";
+    /**
+     * 컬럼 영역이 와일드카드(*) 또는 별칭.* 만 있는지 체크
+     * 예: "T.*" → true
+     *     "*"   → true
+     *     "A.USER_NM, B.USER_NM" → false
+     */
+    private boolean isWildCardOnly(String columnArea) {
+        String trimmed = columnArea.trim();
+        // * 또는 별칭.* 패턴만 있는지 체크
+        return trimmed.matches("(?i)\\*|\\w+\\.\\*");
+    }
+
+    /**
+     * depth 0 기준으로 SELECT ~ 메인 FROM 사이 컬럼 영역만 추출
+     * FROM 절 이후는 완전히 무시
+     */
+    private String extractColumnArea(String sql) {
+        String upper = sql.toUpperCase();
+        int selectIndex = upper.indexOf("SELECT");
+        if (selectIndex == -1) return "";
+
+        int i = selectIndex + "SELECT".length();
+        StringBuilder columns = new StringBuilder();
+        int depth = 0;
+
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+
+            if (c == '(') {
+                depth++;
+                columns.append(c);
+            } else if (c == ')') {
+                depth--;
+                columns.append(c);
+            } else if (depth == 0) {
+                // depth 0 일 때만 메인 FROM 체크
+                if (upper.startsWith("FROM", i) && isBoundary(sql, i - 1) && isBoundary(sql, i + 4)) {
+                    break; // 메인 FROM 만나면 종료
+                }
+                columns.append(c);
+            } else {
+                columns.append(c);
+            }
+
+            i++;
+        }
+
+        return columns.toString().trim();
+    }
+
+    /**
+     * 단어 경계 체크
+     */
+    private boolean isBoundary(String sql, int index) {
+        if (index < 0 || index >= sql.length()) return true;
+        char c = sql.charAt(index);
+        return Character.isWhitespace(c) || c == ',' || c == '(' || c == ')';
     }
 
     /**
@@ -151,7 +215,6 @@ public class SqlTableChecker {
      * FROM ( SELECT ~ ) 안의 SQL 추출
      */
     private String extractInlineViewSql(String sql) {
-        // FROM 이후 첫 번째 괄호 위치 찾기
         String upperSql = sql.toUpperCase();
         int fromIndex = upperSql.indexOf("FROM");
         if (fromIndex == -1) return null;
@@ -159,7 +222,6 @@ public class SqlTableChecker {
         int openIndex = sql.indexOf('(', fromIndex);
         if (openIndex == -1) return null;
 
-        // 괄호 depth 추적으로 인라인 뷰 전체 추출
         int depth = 1;
         int i = openIndex + 1;
 
@@ -170,43 +232,36 @@ public class SqlTableChecker {
             i++;
         }
 
-        // 괄호 안의 SQL 반환
         return sql.substring(openIndex + 1, i - 1).trim();
     }
 
     /**
-     * SELECT 컬럼 자리의 스칼라 서브쿼리만 제거
-     * 판단 기준: 괄호 닫힌 후 AS 컬럼명 또는 , 또는 FROM 이 오는 경우
-     * 예: (SELECT CODE_NM FROM ...) AS CODE_NM  → 제거
-     *     COALESCE(B.USER_NM, A.USER_NM)        → 유지
+     * 컬럼 영역 안의 스칼라 서브쿼리만 제거
      */
-    private String removeScalarSubQueries(String sql) {
+    private String removeScalarSubQueries(String columnArea) {
         StringBuilder result = new StringBuilder();
         int i = 0;
 
-        while (i < sql.length()) {
-            char c = sql.charAt(i);
+        while (i < columnArea.length()) {
+            char c = columnArea.charAt(i);
 
             if (c == '(') {
-                // 괄호 안 내용 추출
                 int depth = 1;
                 int start = i + 1;
                 int j = i + 1;
 
-                while (j < sql.length() && depth > 0) {
-                    if      (sql.charAt(j) == '(') depth++;
-                    else if (sql.charAt(j) == ')') depth--;
+                while (j < columnArea.length() && depth > 0) {
+                    if      (columnArea.charAt(j) == '(') depth++;
+                    else if (columnArea.charAt(j) == ')') depth--;
                     j++;
                 }
 
-                String inner = sql.substring(start, j - 1).trim();
+                String inner = columnArea.substring(start, j - 1).trim();
 
-                // 괄호 안이 SELECT로 시작하면 스칼라 서브쿼리 → 제거
                 if (inner.toUpperCase().startsWith("SELECT")) {
-                    i = j; // 괄호 전체 스킵
+                    i = j; // 스칼라 서브쿼리 제거
                 } else {
-                    // SQL 함수 괄호 → 유지
-                    result.append(sql, i, j);
+                    result.append(columnArea, i, j); // SQL 함수 유지
                     i = j;
                 }
             } else {
@@ -215,7 +270,7 @@ public class SqlTableChecker {
             }
         }
 
-        return result.toString();
+        return result.toString().trim();
     }
 
     // alias 여러 개 추출
@@ -236,5 +291,13 @@ public class SqlTableChecker {
     private boolean containsTable(String sql, String tableName) {
         String regex = "(?<![\\w])(" + tableName + ")(?![\\w])";
         return sql.matches("(?s).*" + regex + ".*");
+    }
+
+    /**
+     * / *i18nExcluded* /
+     * 주석 포함 여부 체크
+     */
+    private boolean isI18nExcluded(String sql) {
+        return sql.contains("/*I18NEXCLUDED*/");
     }
 }
