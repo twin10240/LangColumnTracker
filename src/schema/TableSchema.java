@@ -6,16 +6,10 @@ import java.util.HashSet;
 import java.util.Set;
 
 public enum TableSchema {
-    /*
-    * 1. XML 파싱 -> SQL
-    * 2. 해당 테이블이 있는지
-    * 3. 사용되였다면 LANG 테이블 존재 체크
-    * 4. 만약 있다면 컬럼 체크
-    * */
 
     CI_BANK_MST("CI_BANK_MST", "CI_BANK_LDTL", new String[]{"FNLT_NM"}),
     CI_COA_MST("CI_COA_MST", "CI_COA_LDTL", new String[]{"ACCT_NM"}),
-    CI_ITEM("CI_ITEM", "CI_ITEMLANG_SDTL", new String[]{"ITEM_NM", "ITEM_SPEC_DC", "ITEM_DTL_SPEC_DC"}),
+    CI_ITEM("CI_ITEM", "CI_ITEMLANG_SDTL", new String[]{"ITEM_NM", "ITEM_SPEC_DC", "ITEM_DTL_SPEC_DC", "ITEM_MTRQLT_DC"}),
     CI_ITEM_DEF("CI_ITEM_DEF", "CI_ITEM_DEF_SDTL", new String[]{"UNTD_ITEM_STD_NM"}),
     CI_MOVETYPE_MST("CI_MOVETYPE_MST", "CI_MOVETYPE_LDTL", new String[]{"INVTRX_TP_NM"}),
     CI_MNG_DTL("CI_MNG_DTL", "CI_MODULE_SDTL", new String[]{"MODULE_NM"}),

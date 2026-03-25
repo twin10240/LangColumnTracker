@@ -9,6 +9,21 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/*
+* ### 동작 흐름
+```
+1단계 테이블 루프 완료 후 usedColumns:
+  [PU_P00220_LANG.SYSDEF_NM, PU_P00230_LANG.SYSDEF_NM, PU_P00030_LANG.SYSDEF_NM, MIIL.ITEM_GRP_NM]
+
+2단계 의심 컬럼 체크:
+  CI_CODEDTL → SYSDEF_NM 체크
+    → alreadyUsed: PU_P00220_LANG.SYSDEF_NM이 .SYSDEF_NM으로 끝남 → true → 스킵 ✅
+
+  CI_ITEM → ITEM_NM 체크
+    → alreadyUsed: false → selectColumns에서 발견 → 의심 컬럼 추가 ✅
+```
+* */
+
 public class SqlTableChecker {
 
     public List<CheckResult> check(List<SelectResult> selectResults) {
@@ -23,64 +38,71 @@ public class SqlTableChecker {
 
             String sqlWithoutWith = removeWithClause(sql);
             String selectColumns  = extractSelectColumns(sqlWithoutWith);
-
-             // WITH절 사용 여부 체크
-            boolean hasWithClause = sql.trim().startsWith("WITH");  // ← 추가
+            boolean hasWithClause = sql.trim().startsWith("WITH"); // WITH절 사용 여부 체크
 
             List<String> tableNames           = new ArrayList<>();
             List<String> langTableNames       = new ArrayList<>();
             List<String> unusedLangTableNames = new ArrayList<>(); // 테이블은 사용했지만 다국어는 미사용
             List<String> usedColumns          = new ArrayList<>();
             List<String> unusedColumns        = new ArrayList<>();
+            List<String> suspiciousColumns    = new ArrayList<>();
 
+            // 1단계: 테이블 기준 체크 먼저 완료
             for (TableSchema schema : TableSchema.values()) {
                 String tableName     = schema.getTableName().toUpperCase();
                 String langTableName = schema.getLangTableName().toUpperCase();
 
-                // 1. 테이블 사용 여부 - 사용 안하면 스킵
-                boolean tableUsed = containsTable(sql, tableName);
-                if (!tableUsed) continue;
-
-                tableNames.add(tableName);
-
-                // 2. 다국어 테이블 사용 여부
+                boolean tableUsed     = containsTable(sql, tableName);
                 boolean langTableUsed = containsTable(sql, langTableName);
 
-                if (langTableUsed) {
-                    langTableNames.add(langTableName);
+                if (tableUsed) {
+                    tableNames.add(tableName);
 
-                    // alias 여러 개 추출
-                    List<String> aliases = extractAliases(sql, langTableName);
+                    if (langTableUsed) {
+                        langTableNames.add(langTableName);
 
-                    for (String column : schema.getColumns()) {
-                        boolean isUsed = false;
-
-                        // 모든 alias에 대해 체크
-                        for (String alias : aliases) {
-                            String target = alias + "." + column.toUpperCase();
-                            if (selectColumns.contains(target)) {
-                                usedColumns.add(target);
-                                isUsed = true;
+                        List<String> aliases = extractAliases(sql, langTableName);
+                        for (String column : schema.getColumns()) {
+                            boolean isUsed = false;
+                            for (String alias : aliases) {
+                                String target = alias + "." + column.toUpperCase();
+                                if (selectColumns.contains(target)) {
+                                    usedColumns.add(target);
+                                    isUsed = true;
+                                }
                             }
+                            if (!isUsed) unusedColumns.add(column);
                         }
-
-                        // alias가 없거나 모든 alias에서 미사용이면 미사용 컬럼으로
-                        if (!isUsed) {
+                    } else {
+                        unusedLangTableNames.add(langTableName);
+                        for (String column : schema.getColumns()) {
                             unusedColumns.add(column);
                         }
-                    }
-                } else {
-                    // 테이블은 사용했지만 다국어 테이블은 미사용
-                    unusedLangTableNames.add(langTableName);
-
-                    // 다국어 테이블 미사용 시 해당 테이블의 모든 컬럼을 미사용으로 추가 ← 추가
-                    for (String column : schema.getColumns()) {
-                        unusedColumns.add(column);
                     }
                 }
             }
 
-            if (tableNames.isEmpty()) continue;
+            // 2단계: 모든 테이블 루프 끝난 후 의심 컬럼 체크 ← 핵심 수정
+            for (TableSchema schema : TableSchema.values()) {
+                String tableName = schema.getTableName().toUpperCase();
+                String langTableName = schema.getLangTableName().toUpperCase();
+
+                // 이미 사용된 테이블은 스킵
+                if (tableNames.contains(tableName)) continue;
+
+                for (String column : schema.getColumns()) {
+                    // 이미 usedColumns에 있는 컬럼은 스킵 (모든 테이블 체크 끝난 후라 완전한 상태)
+                    boolean alreadyUsed = usedColumns.stream()
+                            .anyMatch(used -> used.toUpperCase().endsWith("." + column.toUpperCase()));
+                    if (alreadyUsed) continue;
+
+                    if (containsColumn(selectColumns, column)) {
+                        suspiciousColumns.add(column + " (원본테이블: " + tableName + ", 다국어테이블: " + langTableName + ")");
+                    }
+                }
+            }
+
+            if (tableNames.isEmpty() && suspiciousColumns.isEmpty()) continue;
 
             checkResults.add(new CheckResult(
                 selectResult.getId(),
@@ -89,7 +111,8 @@ public class SqlTableChecker {
                 langTableNames,
                 unusedLangTableNames,
                 usedColumns,
-                unusedColumns
+                unusedColumns,
+                suspiciousColumns
             ));
         }
 
@@ -299,5 +322,14 @@ public class SqlTableChecker {
      */
     private boolean isI18nExcluded(String sql) {
         return sql.contains("/*I18NEXCLUDED*/");
+    }
+
+    /**
+     * 조회 컬럼 영역에서 컬럼명 단어 단위 체크
+     * 예: USER_NM이 A.USER_NM, B.USER_NM 등으로 사용되는지 확인
+     */
+    private boolean containsColumn(String selectColumns, String column) {
+        String regex = "(?<![\\w])" + column + "(?![\\w])";
+        return selectColumns.matches("(?s).*" + regex + ".*");
     }
 }

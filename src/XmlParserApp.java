@@ -9,15 +9,29 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Collectors;
 
+/*
+* 1. XML 파싱 -> SQL
+* 2. 해당 테이블이 있는지
+* 3. 사용되였다면 LANG 테이블 존재 체크
+* 4. 만약 있다면 컬럼 체크
+*
+* * ### 체크 로직 추가 방향
+기존 로직은 **테이블 기준**으로 체크했다면, 추가로 **컬럼명 기준**으로도 체크해야 해요.
+*
+1. 다국어 대상 테이블 사용 → 기존 로직
+2. 다국어 대상 컬럼명이 조회 컬럼에 있는데 다국어 테이블은 안 쓴 경우 → 추가 로직
+*
+* */
+
 public class XmlParserApp {
 
     // true  : 미사용 컬럼이 있는 select만 출력
     // false : 모든 select 출력
-    private static final boolean ONLY_HAS_UNUSED_COLUMNS = true;
+    private static final boolean ONLY_HAS_UNUSED_COLUMNS = false;
 
     public static void main(String[] args) throws Exception {
-        String folderPath = "C:\\git_repository\\douzone-comet-service-pu-puocon\\src\\main\\resources\\mybatis\\com";
-//        String folderPath = "C:\\git_repository\\test";
+//        String folderPath = "C:\\git_repository\\douzone-comet-service-pu-requestcommon\\src\\main\\resources\\mybatis\\com";
+        String folderPath = "C:\\git_repository\\test";
 
         XmlFileLoader         loader  = new XmlFileLoader(folderPath);
         XmlFileParser         parser  = new XmlFileParser();

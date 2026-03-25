@@ -11,6 +11,8 @@ public class CheckResult {
     private final List<String> unusedLangTableNames; // 테이블은 사용했지만 다국어는 미사용
     private final List<String> usedColumns;
     private final List<String> unusedColumns;
+    private final List<String> suspiciousColumns; // ← 추가 (다국어 대상 컬럼명이 다른 테이블에서 사용된 경우)
+
 
     public CheckResult(String selectId,
                        boolean hasWithClause,
@@ -18,14 +20,15 @@ public class CheckResult {
                        List<String> langTableNames,
                        List<String> unusedLangTableNames,
                        List<String> usedColumns,
-                       List<String> unusedColumns) {
+                       List<String> unusedColumns, List<String> suspiciousColumns) {
         this.selectId             = selectId;
-        this.hasWithClause = hasWithClause;
+        this.hasWithClause        = hasWithClause;
         this.tableNames           = tableNames;
         this.langTableNames       = langTableNames;
         this.unusedLangTableNames = unusedLangTableNames;
         this.usedColumns          = usedColumns;
         this.unusedColumns        = unusedColumns;
+        this.suspiciousColumns    = suspiciousColumns;
     }
 
     public String getSelectId()                   { return selectId; }
@@ -35,6 +38,7 @@ public class CheckResult {
     public List<String> getUnusedLangTableNames() { return unusedLangTableNames; }
     public List<String> getUsedColumns()          { return usedColumns; }
     public List<String> getUnusedColumns()        { return unusedColumns; }
+    public List<String> getSuspiciousColumns() { return suspiciousColumns; }
 
     public String toBoxString(int index) {
         String divider = "  " + repeatStr("─", 50);
@@ -49,6 +53,7 @@ public class CheckResult {
         sb.append("  미사용 다국어 테이블 : ").append(unusedLangTableNames.isEmpty() ? "없음" : unusedLangTableNames).append("\n");
         sb.append("  사용된 컬럼          : ").append(usedColumns.isEmpty()          ? "없음" : usedColumns).append("\n");
         sb.append("  미사용 컬럼          : ").append(unusedColumns.isEmpty() ? "없음" : unusedColumns).append("\n");
+        sb.append("  ※ 확인 필요 컬럼    : ").append(suspiciousColumns.isEmpty() ? "없음" : suspiciousColumns).append("\n");
 
         sb.append(divider);
         return sb.toString();
